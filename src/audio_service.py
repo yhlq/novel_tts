@@ -1,23 +1,37 @@
 """音频生成业务逻辑"""
 import os
-import time
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from .database import db, Character, Line, Voice
 from .audio_generator import (
-    AudioGenerator, VoiceConfig, get_audio_generator,
+    AudioGenerator, get_audio_generator,
     merge_audio_segments, save_audio
 )
 from .config_manager import config
+from .voice_consistency import consistency_manager
 
 
 NARRATOR_NAME = "旁白"
 
 
+def is_consistency_enabled() -> bool:
+    return config.get("consistency.enabled", True)
+
+
 def get_inference_kwargs() -> dict:
-    """从配置读取模型推理参数"""
+    """从配置读取模型推理参数；一致性模式下使用更稳定的采样参数"""
+    if is_consistency_enabled():
+        return {
+            "temperature": config.get("consistency.temperature", config.get("temperature", 0.65)),
+            "top_p": config.get("consistency.top_p", config.get("top_p", 0.9)),
+            "top_k": config.get("consistency.top_k", config.get("top_k", 40)),
+            "repetition_penalty": config.get(
+                "consistency.repetition_penalty", config.get("repetition_penalty", 1.05)
+            ),
+            "max_new_tokens": config.get("max_new_tokens", 2048),
+        }
     return {
         "temperature": config.get("temperature", 0.9),
         "top_p": config.get("top_p", 1.0),
@@ -27,29 +41,43 @@ def get_inference_kwargs() -> dict:
     }
 
 
-def voice_to_config(voice: Voice) -> VoiceConfig:
-    return VoiceConfig(
-        id=voice.id,
-        name=voice.name,
-        voice_type=voice.voice_type,
-        speaker=voice.speaker,
-        instruct=voice.instruct,
-        ref_audio_path=voice.ref_audio_path,
-        ref_text=voice.ref_text,
-        emotion=voice.emotion,
-    )
+def build_instruct(voice: Voice, line_emotion: Optional[str] = None) -> Optional[str]:
+    """
+    构建 instruct。一致性模式下默认只用声音级描述，避免每句情感导致音色漂移。
+    """
+    stable = is_consistency_enabled() and config.get("consistency.stable_instruct", True)
+    allow_line_emotion = config.get("consistency.line_emotion_affects_timbre", False)
 
-
-def build_instruct(voice: Voice, line_emotion: Optional[str] = None) -> str:
-    """合并声音默认情感与台词情感为 instruct"""
     parts = []
+    if voice.voice_type == "design" and voice.instruct:
+        parts.append(voice.instruct.strip())
     if voice.emotion:
         parts.append(voice.emotion.strip())
-    if line_emotion and line_emotion.strip():
+    if not stable and allow_line_emotion and line_emotion and line_emotion.strip():
         parts.append(line_emotion.strip())
-    if voice.voice_type == "design" and voice.instruct:
-        parts.insert(0, voice.instruct.strip())
-    return "，".join(parts) if parts else ""
+
+    if voice.voice_type == "predefined":
+        if not parts:
+            return None
+        return "，".join(parts)
+
+    return "，".join(parts) if parts else None
+
+
+def warmup_project_voices(project_id: int, generator: Optional[AudioGenerator] = None) -> None:
+    """批量生成前预热项目中用到的所有声音缓存"""
+    gen = generator or get_audio_generator()
+    if not is_consistency_enabled():
+        return
+    characters = db.get_project_characters(project_id)
+    voice_ids = {c.voice_id for c in characters if c.voice_id}
+    for vid in voice_ids:
+        voice = db.get_voice(vid)
+        if voice and voice.voice_type in ("design", "clone"):
+            try:
+                consistency_manager.ensure_clone_prompt(voice, gen)
+            except Exception as e:
+                gen.logger.warning(f"预热声音失败 voice_id={vid}: {e}")
 
 
 def generate_line_audio(
@@ -73,20 +101,26 @@ def generate_line_audio(
     if not voice:
         return None, "声音不存在"
 
-    voice_config = voice_to_config(voice)
-    instruct = build_instruct(voice, line.emotion)
-
     try:
-        if voice.voice_type == "predefined":
+        if is_consistency_enabled() and voice.voice_type in ("design", "clone"):
+            prompt = consistency_manager.ensure_clone_prompt(voice, gen)
+            audio, sr = gen.generate_voice_clone_with_prompt(
+                text=line.content,
+                voice_clone_prompt=prompt,
+                language=config.get("language", "Chinese"),
+                **inference_kw,
+            )
+        elif voice.voice_type == "predefined":
+            instruct = build_instruct(voice, line.emotion)
             audio, sr = gen.generate_custom_voice(
                 text=line.content,
                 speaker=voice.speaker,
                 language=config.get("language", "Chinese"),
-                instruct=instruct or None,
+                instruct=instruct,
                 **inference_kw,
             )
         elif voice.voice_type == "design":
-            design_instruct = instruct or voice.instruct or voice.emotion or ""
+            design_instruct = build_instruct(voice, line.emotion) or voice.instruct or voice.emotion or ""
             audio, sr = gen.generate_voice_design(
                 text=line.content,
                 instruct=design_instruct,
@@ -125,6 +159,8 @@ def generate_project_all(project_id: int) -> dict:
     generator = get_audio_generator()
     db.update_project_status(project_id, "generating")
 
+    warmup_project_voices(project_id, generator)
+
     audio_segments: List[Tuple[np.ndarray, int]] = []
     errors = []
     success = 0
@@ -147,6 +183,24 @@ def generate_project_all(project_id: int) -> dict:
 
     db.update_project_status(project_id, "completed" if success else "parsed")
     return {"success": success, "failed": failed, "errors": errors[:20]}
+
+
+def merge_project_audio(project_id: int) -> Optional[str]:
+    """按台词顺序合并已生成的音频片段"""
+    import soundfile as sf
+
+    lines = db.get_project_lines(project_id)
+    audio_segments: List[Tuple[np.ndarray, int]] = []
+    for line in lines:
+        seg = db.get_audio_segment_by_line(line.id)
+        if seg and seg.audio_path and os.path.exists(seg.audio_path):
+            audio, sr = sf.read(seg.audio_path)
+            audio_segments.append((audio, sr))
+    if not audio_segments:
+        return None
+    merged_path = f"static/audio/project_{project_id}_merged.wav"
+    merge_audio_segments(audio_segments, merged_path)
+    return merged_path
 
 
 def parse_and_assign_voices(project_id: int, text_content: str) -> dict:

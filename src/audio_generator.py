@@ -213,6 +213,24 @@ class AudioGenerator(LoggerMixin):
             self.log_error("设计声音音频生成失败", e)
             raise
     
+    def generate_voice_clone_with_prompt(
+        self,
+        text: str,
+        voice_clone_prompt,
+        language: str = None,
+        **kwargs,
+    ) -> Tuple[np.ndarray, int]:
+        """使用已缓存的 voice_clone_prompt 生成，保证同角色音色一致"""
+        language = language or config.get("language", "Chinese")
+        gen_kw = self._inference_kwargs(kwargs)
+        wavs, sr = self.voice_clone_model.generate_voice_clone(
+            text=text,
+            language=language,
+            voice_clone_prompt=voice_clone_prompt,
+            **gen_kw,
+        )
+        return wavs[0], sr
+
     def generate_voice_clone(self, text: str, ref_audio_path: str, ref_text: str, language: str = None, **kwargs) -> Tuple[np.ndarray, int]:
         """
         使用声音克隆生成音频

@@ -413,7 +413,7 @@ class Database:
 
     def update_voice(self, voice_id: int, **fields):
         """更新声音信息"""
-        allowed = {"name", "description", "instruct", "emotion", "speaker", "ref_text"}
+        allowed = {"name", "description", "instruct", "emotion", "speaker", "ref_text", "ref_audio_path"}
         updates = {k: v for k, v in fields.items() if k in allowed}
         if not updates:
             return

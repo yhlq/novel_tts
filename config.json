@@ -35,6 +35,18 @@
   "top_p": 1.0,
   "top_k": 50,
   "repetition_penalty": 1.05,
+  "consistency": {
+    "enabled": true,
+    "design_via_clone": true,
+    "stable_instruct": true,
+    "line_emotion_affects_timbre": false,
+    "temperature": 0.65,
+    "top_p": 0.9,
+    "top_k": 40,
+    "repetition_penalty": 1.05,
+    "x_vector_only_mode": false,
+    "anchor_text": "你好，我是这个角色，很高兴为你朗读这段小说。"
+  },
   "audio": {
     "pause_duration": 0.5,
     "output_format": "wav"

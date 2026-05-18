@@ -38,6 +38,53 @@ function statusBadge(status) {
   return `<span class="badge badge-${status}">${map[status] || status}</span>`;
 }
 
+const LINE_STATUS = {
+  pending: { text: '待生成', cls: 'badge-pending' },
+  generating: { text: '生成中…', cls: 'badge-generating' },
+  done: { text: '已生成', cls: 'badge-completed' },
+  failed: { text: '失败', cls: 'badge-failed' },
+};
+
+function lineStatusBadge(status) {
+  const s = LINE_STATUS[status] || LINE_STATUS.pending;
+  return `<span class="badge line-status ${s.cls}" data-status="${status}">${s.text}</span>`;
+}
+
+function setProjectWsStatus(status) {
+  const el = document.getElementById('wsStatus');
+  if (!el) return;
+  const map = { pending: '待处理', parsed: '已解析', generating: '生成中', completed: '已完成' };
+  el.className = 'badge badge-' + status;
+  el.textContent = map[status] || status;
+}
+
+function setLineStatus(lineId, status, audioPath, errorMsg) {
+  const item = document.querySelector(`.line-item[data-line-id="${lineId}"]`);
+  if (!item) return;
+  item.classList.remove('generating', 'done', 'failed');
+  if (status === 'generating') item.classList.add('generating');
+  if (status === 'done') item.classList.add('done');
+  if (status === 'failed') item.classList.add('failed');
+
+  const badge = item.querySelector('.line-status');
+  if (badge) {
+    const s = LINE_STATUS[status] || LINE_STATUS.pending;
+    badge.className = `badge line-status ${s.cls}`;
+    badge.dataset.status = status;
+    badge.textContent = errorMsg ? `失败: ${errorMsg.slice(0, 20)}` : s.text;
+  }
+
+  const slot = item.querySelector('.line-audio-slot');
+  if (!slot) return;
+  if (status === 'generating') {
+    slot.innerHTML = '<span style="color:var(--warning);font-size:0.85rem">正在合成…</span>';
+  } else if (status === 'done' && audioPath) {
+    slot.innerHTML = `<audio controls src="${audioUrl(audioPath)}?t=${Date.now()}"></audio>`;
+  } else if (status === 'failed') {
+    slot.innerHTML = `<span style="color:var(--danger);font-size:0.85rem">${escapeHtml(errorMsg || '生成失败')}</span>`;
+  }
+}
+
 // ---------- Tab ----------
 document.querySelectorAll('#mainTabs .tab').forEach(tab => {
   tab.addEventListener('click', () => {
@@ -136,9 +183,7 @@ async function refreshWorkspace() {
   if (!currentProjectId) return;
   const ws = await api(`/api/projects/${currentProjectId}/workspace`);
   document.getElementById('wsProjectName').textContent = ws.project.name;
-  const statusEl = document.getElementById('wsStatus');
-  statusEl.className = 'badge badge-' + ws.project.status;
-  statusEl.textContent = { pending: '待处理', parsed: '已解析', generating: '生成中', completed: '已完成' }[ws.project.status] || ws.project.status;
+  setProjectWsStatus(ws.project.status);
 
   await loadVoicesCache();
   renderCharacters(ws.characters);
@@ -183,12 +228,15 @@ function renderLines(lines) {
     return;
   }
   el.innerHTML = lines.map(line => {
+    const st = line.status || (line.has_audio ? 'done' : 'pending');
+    const itemCls = st === 'done' ? 'done' : (st === 'failed' ? 'failed' : '');
     const audioHtml = line.has_audio
-      ? `<audio controls src="${audioUrl(line.audio_path)}"></audio>`
+      ? `<audio controls src="${audioUrl(line.audio_path)}?t=${line.id}"></audio>`
       : '<span style="color:var(--muted);font-size:0.85rem">未生成</span>';
-    return `<div class="line-item" data-line-id="${line.id}">
+    return `<div class="line-item ${itemCls}" data-line-id="${line.id}">
       <div class="line-header">
         <span class="badge">#${line.order + 1}</span>
+        ${lineStatusBadge(st)}
         <strong>${escapeHtml(line.character_name)}</strong>
         ${line.voice_name ? `<span style="color:var(--muted);font-size:0.85rem"> → ${escapeHtml(line.voice_name)}</span>` : ''}
       </div>
@@ -198,7 +246,7 @@ function renderLines(lines) {
         <button class="btn btn-sm btn-primary" onclick="generateLine(${line.id}, this)">生成</button>
         <button class="btn btn-sm btn-secondary" onclick="regenerateLine(${line.id}, this)">重新生成</button>
         <button class="btn btn-sm btn-secondary" onclick="saveLineEmotion(${line.id})">保存情感</button>
-        ${audioHtml}
+        <span class="line-audio-slot">${audioHtml}</span>
       </div>
     </div>`;
   }).join('');
@@ -214,11 +262,14 @@ async function saveLineEmotion(lineId) {
 
 async function generateLine(lineId, btn) {
   if (btn) { btn.disabled = true; btn.textContent = '生成中…'; }
+  setLineStatus(lineId, 'generating');
   try {
-    await api(`/api/projects/${currentProjectId}/lines/${lineId}/generate`, { method: 'POST' });
+    const r = await api(`/api/projects/${currentProjectId}/lines/${lineId}/generate`, { method: 'POST' });
+    const path = r.audio_path?.startsWith('/') ? r.audio_path : '/' + (r.audio_path || '');
+    setLineStatus(lineId, 'done', path);
     toast('生成成功');
-    await refreshWorkspace();
   } catch (e) {
+    setLineStatus(lineId, 'failed', null, e.message);
     toast('生成失败: ' + e.message, true);
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = '生成'; }
@@ -249,20 +300,51 @@ document.getElementById('btnParse').addEventListener('click', async () => {
 
 document.getElementById('btnGenerateAll').addEventListener('click', async () => {
   if (!currentProjectId) return;
-  if (!confirm('将为全部台词生成音频，可能耗时较长，继续？')) return;
+  const ws = await api(`/api/projects/${currentProjectId}/workspace`);
+  if (!ws.lines.length) return toast('请先解析文本', true);
+  if (!confirm(`将为 ${ws.lines.length} 条台词逐条生成音频，继续？`)) return;
+
   const btn = document.getElementById('btnGenerateAll');
   btn.disabled = true;
-  btn.textContent = '生成中…';
+  btn.textContent = `生成中 0/${ws.lines.length}`;
+  setProjectWsStatus('generating');
+
   try {
-    const r = await api(`/api/projects/${currentProjectId}/generate`, { method: 'POST' });
-    toast(`完成：成功 ${r.success}，失败 ${r.failed}`);
-    await refreshWorkspace();
+    toast('正在预热角色音色缓存…');
+    await api(`/api/projects/${currentProjectId}/warmup-voices`, { method: 'POST' });
   } catch (e) {
-    toast('批量生成失败: ' + e.message, true);
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '一键生成全部音频';
+    console.warn('音色预热:', e.message);
   }
+
+  let success = 0;
+  let failed = 0;
+
+  for (let i = 0; i < ws.lines.length; i++) {
+    const line = ws.lines[i];
+    btn.textContent = `生成中 ${i + 1}/${ws.lines.length}`;
+    setLineStatus(line.id, 'generating');
+    try {
+      const r = await api(`/api/projects/${currentProjectId}/lines/${line.id}/generate`, { method: 'POST' });
+      const path = r.audio_path?.startsWith('/') ? r.audio_path : '/' + (r.audio_path || '');
+      setLineStatus(line.id, 'done', path);
+      success++;
+    } catch (e) {
+      setLineStatus(line.id, 'failed', null, e.message);
+      failed++;
+    }
+  }
+
+  try {
+    if (success > 0) {
+      await api(`/api/projects/${currentProjectId}/merge`, { method: 'POST' });
+      setProjectWsStatus('completed');
+    }
+  } catch (_) { /* 合并不阻断 */ }
+
+  toast(`完成：成功 ${success}，失败 ${failed}`);
+  btn.disabled = false;
+  btn.textContent = '一键生成全部音频';
+  await refreshWorkspace();
 });
 
 document.getElementById('btnDownloadMerged').addEventListener('click', () => {
@@ -293,6 +375,7 @@ async function loadVoices() {
         <input type="text" placeholder="试听文本" value="你好，这是试听。" data-preview-text="${v.id}">
         <input type="text" placeholder="情感" style="max-width:90px" data-preview-emotion="${v.id}">
         <button class="btn btn-sm btn-primary" onclick="previewVoice(${v.id})">试听</button>
+        ${v.type !== 'predefined' ? `<button class="btn btn-sm btn-secondary" onclick="warmupVoice(${v.id})">预热音色</button>` : ''}
         ${v.type !== 'predefined' ? `<button class="btn btn-sm btn-danger" onclick="deleteVoice(${v.id})">删除</button>` : ''}
       </div>
       <audio id="preview-audio-${v.id}" controls style="width:100%;margin-top:8px;display:none"></audio>
@@ -366,6 +449,7 @@ document.getElementById('cloneForm').addEventListener('submit', async e => {
 async function loadInferenceConfig() {
   const cfg = await api('/api/config');
   const inf = cfg.inference || cfg;
+  const con = cfg.consistency || {};
   const form = document.getElementById('inferenceForm');
   ['temperature', 'top_p', 'top_k', 'repetition_penalty', 'max_new_tokens', 'language'].forEach(k => {
     const input = form.elements[k];
@@ -373,6 +457,12 @@ async function loadInferenceConfig() {
   });
   if (form.elements.pause_duration && cfg.audio) {
     form.elements.pause_duration.value = cfg.audio.pause_duration ?? 0.5;
+  }
+  if (form.elements.consistency_enabled) form.elements.consistency_enabled.checked = con.enabled !== false;
+  if (form.elements.design_via_clone) form.elements.design_via_clone.checked = con.design_via_clone !== false;
+  if (form.elements.stable_instruct) form.elements.stable_instruct.checked = con.stable_instruct !== false;
+  if (form.elements.consistency_temperature && con.temperature != null) {
+    form.elements.consistency_temperature.value = con.temperature;
   }
 }
 
@@ -387,6 +477,12 @@ document.getElementById('inferenceForm').addEventListener('submit', async e => {
     max_new_tokens: parseInt(form.max_new_tokens.value, 10),
     language: form.language.value,
     audio: { pause_duration: parseFloat(form.pause_duration.value) },
+    consistency: {
+      enabled: form.consistency_enabled?.checked ?? true,
+      design_via_clone: form.design_via_clone?.checked ?? true,
+      stable_instruct: form.stable_instruct?.checked ?? true,
+      temperature: parseFloat(form.consistency_temperature?.value || '0.65'),
+    },
   };
   try {
     await api('/api/config/inference', {
@@ -419,3 +515,13 @@ window.regenerateLine = regenerateLine;
 window.saveLineEmotion = saveLineEmotion;
 window.previewVoice = previewVoice;
 window.deleteVoice = deleteVoice;
+
+async function warmupVoice(voiceId) {
+  try {
+    const r = await api(`/api/voices/${voiceId}/warmup`, { method: 'POST' });
+    toast(r.message || '预热完成');
+  } catch (e) {
+    toast('预热失败: ' + e.message, true);
+  }
+}
+window.warmupVoice = warmupVoice;

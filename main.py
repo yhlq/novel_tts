@@ -14,8 +14,10 @@ from src.text_parser import parse_novel_text
 from src.audio_generator import get_audio_generator, save_audio
 from src.audio_service import (
     parse_and_assign_voices, generate_project_all, generate_line_audio,
-    get_inference_kwargs, build_instruct, NARRATOR_NAME
+    merge_project_audio, get_inference_kwargs, build_instruct,
+    is_consistency_enabled, warmup_project_voices, NARRATOR_NAME
 )
+from src.voice_consistency import consistency_manager
 from src.config_manager import config
 from src.logger import setup_logger, log_system_info
 
@@ -135,6 +137,20 @@ async def delete_project(project_id: int):
     return {"message": "项目已删除"}
 
 
+@app.post("/api/projects/{project_id}/warmup-voices")
+async def warmup_project_voices_api(project_id: int):
+    """预热项目中所有设计/克隆声音的音色缓存"""
+    project = db.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    try:
+        generator = get_audio_generator()
+        warmup_project_voices(project_id, generator)
+        return {"message": "项目音色预热完成"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/projects/{project_id}/parse")
 async def parse_project_text(project_id: int):
     project = db.get_project(project_id)
@@ -177,6 +193,7 @@ async def get_project_workspace(project_id: int):
             "has_audio": seg is not None,
             "audio_path": ("/" + seg.audio_path if seg and not seg.audio_path.startswith("/") else seg.audio_path) if seg else None,
             "duration": seg.duration if seg else None,
+            "status": "done" if seg else "pending",
         })
 
     result_chars = []
@@ -255,7 +272,10 @@ async def generate_single_line(project_id: int, line_id: int):
     path, err = generate_line_audio(project_id, line, character_map)
     if err:
         raise HTTPException(status_code=400, detail=err)
-    return {"audio_path": path, "message": "生成成功"}
+    return {
+        "audio_path": "/" + path if not path.startswith("/") else path,
+        "message": "生成成功",
+    }
 
 
 # ========== 声音库 API ==========
@@ -286,7 +306,9 @@ async def update_voice(
     if emotion is not None:
         fields["emotion"] = emotion
     db.update_voice(voice_id, **fields)
-    return {"message": "声音已更新"}
+    if fields:
+        consistency_manager.invalidate(voice_id)
+    return {"message": "声音已更新，音色缓存已清除"}
 
 
 @app.post("/api/voices/design")
@@ -332,7 +354,24 @@ async def delete_voice(voice_id: int):
     if voice and voice.voice_type == "predefined":
         raise HTTPException(status_code=400, detail="不能删除预置声音")
     db.delete_voice(voice_id)
+    consistency_manager.invalidate(voice_id)
     return {"message": "声音已删除"}
+
+
+@app.post("/api/voices/{voice_id}/warmup")
+async def warmup_voice(voice_id: int):
+    """预生成音色锚点与克隆 prompt，提升同角色一致性"""
+    voice = db.get_voice(voice_id)
+    if not voice:
+        raise HTTPException(status_code=404, detail="声音不存在")
+    if voice.voice_type == "predefined":
+        return {"message": "预置声音无需预热", "cached": False}
+    try:
+        generator = get_audio_generator()
+        return consistency_manager.warmup_voice(voice, generator)
+    except Exception as e:
+        logger.error(f"预热失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/voices/{voice_id}/preview")
@@ -350,7 +389,13 @@ async def preview_voice(
     instruct = build_instruct(voice, emotion or None)
 
     try:
-        if voice.voice_type == "predefined":
+        if is_consistency_enabled() and voice.voice_type in ("design", "clone"):
+            prompt = consistency_manager.ensure_clone_prompt(voice, generator)
+            audio, sr = generator.generate_voice_clone_with_prompt(
+                text=text, voice_clone_prompt=prompt,
+                language=config.get("language", "Chinese"), **inference_kw,
+            )
+        elif voice.voice_type == "predefined":
             audio, sr = generator.generate_custom_voice(
                 text=text, speaker=voice.speaker,
                 language=config.get("language", "Chinese"),
@@ -382,6 +427,7 @@ async def preview_voice(
 
 @app.post("/api/projects/{project_id}/generate")
 async def generate_project_audio(project_id: int):
+    """服务端批量生成（同步阻塞，适合 API 调用；前端一键生成请用逐条接口）"""
     project = db.get_project(project_id)
     if not project:
         raise HTTPException(status_code=404, detail="项目不存在")
@@ -391,6 +437,19 @@ async def generate_project_audio(project_id: int):
     except Exception as e:
         logger.error(f"批量生成失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/projects/{project_id}/merge")
+async def merge_project_audio_api(project_id: int):
+    """合并已生成的台词音频"""
+    project = db.get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    path = merge_project_audio(project_id)
+    if not path:
+        raise HTTPException(status_code=400, detail="没有可合并的音频片段")
+    db.update_project_status(project_id, "completed")
+    return {"message": "合并完成", "audio_path": "/" + path}
 
 
 @app.get("/api/projects/{project_id}/audio")
@@ -415,12 +474,17 @@ async def download_project_audio(project_id: int):
 # ========== 配置 API ==========
 
 INFERENCE_KEYS = ("temperature", "top_p", "top_k", "repetition_penalty", "max_new_tokens", "language")
+CONSISTENCY_KEYS = (
+    "enabled", "design_via_clone", "stable_instruct", "line_emotion_affects_timbre",
+    "temperature", "top_p", "top_k", "repetition_penalty", "x_vector_only_mode", "anchor_text",
+)
 
 
 @app.get("/api/config")
 async def get_config_api():
     cfg = config.config.copy()
     cfg["inference"] = {k: config.get(k) for k in INFERENCE_KEYS}
+    cfg["consistency"] = {k: config.get(f"consistency.{k}") for k in CONSISTENCY_KEYS}
     return cfg
 
 
@@ -430,11 +494,19 @@ async def update_inference_config(body: dict = Body(...)):
     for key in INFERENCE_KEYS:
         if key in body:
             config.set(key, body[key])
+    if "consistency" in body and isinstance(body["consistency"], dict):
+        for k, v in body["consistency"].items():
+            if k in CONSISTENCY_KEYS:
+                config.set(f"consistency.{k}", v)
     if "audio" in body and isinstance(body["audio"], dict):
         for k, v in body["audio"].items():
             config.set(f"audio.{k}", v)
     config.save()
-    return {"message": "推理参数已保存", "inference": {k: config.get(k) for k in INFERENCE_KEYS}}
+    return {
+        "message": "推理参数已保存",
+        "inference": {k: config.get(k) for k in INFERENCE_KEYS},
+        "consistency": {k: config.get(f"consistency.{k}") for k in CONSISTENCY_KEYS},
+    }
 
 
 @app.post("/api/config/reload")

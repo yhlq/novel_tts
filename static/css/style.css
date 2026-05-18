@@ -129,6 +129,17 @@ th { color: var(--muted); font-weight: 500; font-size: 0.8rem; }
 .badge-parsed { background: #2a3a5c; color: var(--accent); }
 .badge-completed { background: #1e3d2f; color: var(--success); }
 .badge-pending { background: var(--surface2); color: var(--muted); }
+.badge-generating { background: #3d3520; color: var(--warning); animation: pulse 1.2s ease-in-out infinite; }
+.badge-failed { background: #3d2020; color: var(--danger); }
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.line-item.generating { border-color: var(--warning); }
+.line-item.done { border-color: var(--success); }
+.line-item.failed { border-color: var(--danger); }
 
 .voice-grid {
   display: grid;
