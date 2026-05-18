@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>小说多角色语音合成</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>小说多角色语音合成</h1>
+    <nav class="tabs" id="mainTabs">
+      <button class="tab active" data-panel="project">项目</button>
+      <button class="tab" data-panel="voices">声音库</button>
+      <button class="tab" data-panel="inference">推理设置</button>
+    </nav>
+  </header>
+
+  <main class="main">
+    <!-- 项目面板 -->
+    <section id="panel-project" class="panel active">
+      <div class="grid-2">
+        <div class="card">
+          <h2>新建 / 导入小说</h2>
+          <div class="form-group">
+            <label>项目名称</label>
+            <input type="text" id="projectName" value="我的小说">
+          </div>
+          <div class="form-group">
+            <label>小说文本（支持 [角色名] 台词、角色名：台词 等格式）</label>
+            <textarea id="textContent" placeholder="粘贴小说文本，或点击下方加载文件…"></textarea>
+          </div>
+          <div class="form-group">
+            <label>或上传文本文件 (.txt)</label>
+            <input type="file" id="fileUpload" accept=".txt,.text">
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="btnCreateProject">创建项目</button>
+            <button class="btn btn-secondary" id="btnLoadExample">加载示例</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>项目列表</h2>
+          <div id="projectsList"><p class="empty">加载中…</p></div>
+        </div>
+      </div>
+
+      <div id="workspaceSection" class="card" style="display:none">
+        <h2>工作台 — <span id="wsProjectName"></span>
+          <span class="badge" id="wsStatus"></span>
+        </h2>
+
+        <div class="btn-row" style="margin-bottom:16px">
+          <button class="btn btn-primary" id="btnParse">解析角色</button>
+          <button class="btn btn-success" id="btnGenerateAll">一键生成全部音频</button>
+          <button class="btn btn-secondary" id="btnDownloadMerged">下载合并音频</button>
+          <button class="btn btn-secondary" id="btnRefreshWs">刷新</button>
+        </div>
+
+        <div class="card" style="background:var(--surface2);margin-bottom:16px">
+          <h2>角色与声音绑定</h2>
+          <p style="font-size:0.85rem;color:var(--muted);margin-bottom:12px">
+            解析后为每个角色自动分配默认声音，可在此修改。
+          </p>
+          <div id="charactersList"></div>
+        </div>
+
+        <div class="card" style="background:var(--surface2)">
+          <h2>台词列表</h2>
+          <div id="linesList"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 声音库面板 -->
+    <section id="panel-voices" class="panel">
+      <div class="card">
+        <h2>系统声音库</h2>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="btnShowDesignModal">+ 声音设计</button>
+          <button class="btn btn-secondary" id="btnShowCloneModal">+ 声音克隆</button>
+          <button class="btn btn-secondary" id="btnRefreshVoices">刷新</button>
+        </div>
+        <div id="voicesGrid" class="voice-grid" style="margin-top:16px"></div>
+      </div>
+    </section>
+
+    <!-- 推理设置面板 -->
+    <section id="panel-inference" class="panel">
+      <div class="card">
+        <h2>模型推理参数</h2>
+        <p style="font-size:0.85rem;color:var(--muted);margin-bottom:16px">
+          调整后将应用于所有新生成的音频（预置/设计/克隆）。
+        </p>
+        <form id="inferenceForm">
+          <div class="inference-grid">
+            <div class="form-group">
+              <label>Temperature</label>
+              <input type="number" name="temperature" step="0.05" min="0" max="2">
+            </div>
+            <div class="form-group">
+              <label>Top P</label>
+              <input type="number" name="top_p" step="0.05" min="0" max="1">
+            </div>
+            <div class="form-group">
+              <label>Top K</label>
+              <input type="number" name="top_k" step="1" min="1" max="200">
+            </div>
+            <div class="form-group">
+              <label>Repetition Penalty</label>
+              <input type="number" name="repetition_penalty" step="0.01" min="1" max="2">
+            </div>
+            <div class="form-group">
+              <label>Max New Tokens</label>
+              <input type="number" name="max_new_tokens" step="64" min="256" max="4096">
+            </div>
+            <div class="form-group">
+              <label>语言</label>
+              <select name="language">
+                <option value="Chinese">Chinese</option>
+                <option value="English">English</option>
+                <option value="Japanese">Japanese</option>
+                <option value="Korean">Korean</option>
+                <option value="Auto">Auto</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>片段间停顿 (秒)</label>
+              <input type="number" name="pause_duration" step="0.1" min="0" max="3">
+            </div>
+          </div>
+          <div class="btn-row">
+            <button type="submit" class="btn btn-primary">保存参数</button>
+            <button type="button" class="btn btn-secondary" id="btnReloadConfig">重新加载配置</button>
+          </div>
+        </form>
+      </div>
+    </section>
+  </main>
+
+  <!-- 声音设计弹窗 -->
+  <div class="modal-overlay" id="designModal">
+    <div class="modal">
+      <h3>创建设计声音</h3>
+      <form id="designForm">
+        <div class="form-group"><label>名称</label><input type="text" name="name" required></div>
+        <div class="form-group"><label>特点描述</label><input type="text" name="description"></div>
+        <div class="form-group"><label>声音设计指令</label><textarea name="instruct" rows="3" required placeholder="如：温柔知性的年轻女声，语速适中"></textarea></div>
+        <div class="form-group"><label>默认情感</label><input type="text" name="emotion" placeholder="如：平静、温柔"></div>
+        <div class="btn-row">
+          <button type="submit" class="btn btn-primary">创建</button>
+          <button type="button" class="btn btn-secondary modal-close">取消</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 声音克隆弹窗 -->
+  <div class="modal-overlay" id="cloneModal">
+    <div class="modal">
+      <h3>创建克隆声音</h3>
+      <form id="cloneForm">
+        <div class="form-group"><label>名称</label><input type="text" name="name" required></div>
+        <div class="form-group"><label>特点描述</label><input type="text" name="description"></div>
+        <div class="form-group"><label>参考音频</label><input type="file" name="ref_audio" accept="audio/*" required></div>
+        <div class="form-group"><label>参考文本（与音频内容一致）</label><textarea name="ref_text" rows="2" required></textarea></div>
+        <div class="form-group"><label>默认情感</label><input type="text" name="emotion"></div>
+        <div class="btn-row">
+          <button type="submit" class="btn btn-primary">创建</button>
+          <button type="button" class="btn btn-secondary modal-close">取消</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
