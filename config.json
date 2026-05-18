@@ -1,7 +1,7 @@
 {
   "models": {
     "custom_voice": {
-      "name": "Qwen/Qwen3-TTS-12Hz-{model_size}-CustomVoice",
+      "name": "/data/personal/zhangyuanhang/Qwen3-TTS-12Hz-{model_size}-CustomVoice",
       "description": "预置声音生成模型，提供9个内置声音",
       "supported_speakers": [
         "Vivian",
@@ -16,18 +16,18 @@
       ]
     },
     "voice_design": {
-      "name": "Qwen/Qwen3-TTS-12Hz-{model_size}-VoiceDesign",
+      "name": "/data/personal/zhangyuanhang/Qwen3-TTS-12Hz-{model_size}-VoiceDesign",
       "description": "声音设计模型，根据自然语言描述生成声音"
     },
     "base": {
-      "name": "Qwen/Qwen3-TTS-12Hz-{model_size}-Base",
+      "name": "/data/personal/zhangyuanhang/Qwen3-TTS-12Hz-{model_size}-Base",
       "description": "声音克隆模型，通过参考音频克隆声音"
     }
   },
   "model_size": "1.7B",
   "device": "cuda:0",
   "dtype": "bfloat16",
-  "attn_implementation": "flash_attention_2",
+  "attn_implementation": null,
   "language": "Chinese",
   "output_sample_rate": 24000,
   "max_new_tokens": 2048,
