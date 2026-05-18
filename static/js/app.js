@@ -77,18 +77,36 @@ function setLineStatus(lineId, status, audioPath, errorMsg) {
   const slot = item.querySelector('.line-audio-slot');
   if (!slot) return;
   if (status === 'generating') {
-    slot.innerHTML = '<span style="color:var(--warning);font-size:0.85rem">正在合成…</span>';
+    slot.innerHTML = '<span class="status-text warn">正在合成…</span>';
   } else if (status === 'done' && audioPath) {
     slot.innerHTML = `<audio controls src="${audioUrl(audioPath)}?t=${Date.now()}"></audio>`;
   } else if (status === 'failed') {
-    slot.innerHTML = `<span style="color:var(--danger);font-size:0.85rem">${escapeHtml(errorMsg || '生成失败')}</span>`;
+    slot.innerHTML = `<span class="status-text err">${escapeHtml(errorMsg || '生成失败')}</span>`;
   }
 }
 
+const AVATAR_COLORS = [
+  'linear-gradient(135deg,#7c6cf0,#a78bfa)',
+  'linear-gradient(135deg,#f472b6,#fb7185)',
+  'linear-gradient(135deg,#34d399,#5eead4)',
+  'linear-gradient(135deg,#38bdf8,#818cf8)',
+  'linear-gradient(135deg,#fbbf24,#f97316)',
+  'linear-gradient(135deg,#c084fc,#e879f9)',
+];
+
+function avatarStyle(name) {
+  const i = (name || '').charCodeAt(0) % AVATAR_COLORS.length;
+  return AVATAR_COLORS[i];
+}
+
+function voiceTypeClass(type) {
+  return { predefined: 'type-predefined', design: 'type-design', clone: 'type-clone' }[type] || '';
+}
+
 // ---------- Tab ----------
-document.querySelectorAll('#mainTabs .tab').forEach(tab => {
+document.querySelectorAll('#mainTabs .nav-tab').forEach(tab => {
   tab.addEventListener('click', () => {
-    document.querySelectorAll('#mainTabs .tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('#mainTabs .nav-tab').forEach(t => t.classList.remove('active'));
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
     tab.classList.add('active');
     document.getElementById('panel-' + tab.dataset.panel).classList.add('active');
@@ -102,21 +120,22 @@ async function loadProjects() {
   const projects = await api('/api/projects');
   const el = document.getElementById('projectsList');
   if (!projects.length) {
-    el.innerHTML = '<p class="empty">暂无项目，请创建</p>';
+    el.innerHTML = '<p class="empty"><span class="empty-icon">📂</span><br>暂无项目，从左侧创建</p>';
     return;
   }
-  el.innerHTML = `<table>
-    <tr><th>ID</th><th>名称</th><th>状态</th><th>操作</th></tr>
-    ${projects.map(p => `<tr>
-      <td>${p.id}</td>
-      <td>${escapeHtml(p.name)}</td>
-      <td>${statusBadge(p.status)}</td>
-      <td>
+  el.innerHTML = projects.map(p => `
+    <div class="project-item ${currentProjectId === p.id ? 'active' : ''}">
+      <div class="project-info">
+        <h4>${escapeHtml(p.name)}</h4>
+        <div class="meta">#${p.id} · ${escapeHtml(p.created_at?.slice(0, 10) || '')}</div>
+        <div style="margin-top:8px">${statusBadge(p.status)}</div>
+      </div>
+      <div class="project-actions">
         <button class="btn btn-sm btn-primary" onclick="openWorkspace(${p.id})">打开</button>
         <button class="btn btn-sm btn-danger" onclick="deleteProject(${p.id})">删除</button>
-      </td>
-    </tr>`).join('')}
-  </table>`;
+      </div>
+    </div>
+  `).join('');
 }
 
 document.getElementById('btnCreateProject').addEventListener('click', async () => {
@@ -165,7 +184,7 @@ async function deleteProject(id) {
   await api(`/api/projects/${id}`, { method: 'DELETE' });
   if (currentProjectId === id) {
     currentProjectId = null;
-    document.getElementById('workspaceSection').style.display = 'none';
+    document.getElementById('workspaceSection').classList.remove('visible');
   }
   loadProjects();
   toast('已删除');
@@ -174,8 +193,9 @@ async function deleteProject(id) {
 // ---------- 工作台 ----------
 async function openWorkspace(projectId) {
   currentProjectId = projectId;
-  document.getElementById('workspaceSection').style.display = 'block';
+  document.getElementById('workspaceSection').classList.add('visible');
   await refreshWorkspace();
+  loadProjects();
   document.getElementById('workspaceSection').scrollIntoView({ behavior: 'smooth' });
 }
 
@@ -193,19 +213,23 @@ async function refreshWorkspace() {
 function renderCharacters(characters) {
   const el = document.getElementById('charactersList');
   if (!characters.length) {
-    el.innerHTML = '<p class="empty">请先解析文本</p>';
+    el.innerHTML = '<p class="empty"><span class="empty-icon">👤</span><br>请先解析文本</p>';
     return;
   }
   el.innerHTML = characters.map(c => {
+    const initial = (c.name || '?').charAt(0);
     const opts = voicesCache.map(v =>
       `<option value="${v.id}" ${v.id === c.voice_id ? 'selected' : ''}>${escapeHtml(v.name)} (${v.type_label})</option>`
     ).join('');
-    return `<div class="char-row">
-      <strong style="min-width:80px">${escapeHtml(c.name)}</strong>
-      <select data-char-id="${c.id}" class="char-voice-select">
-        <option value="">— 选择声音 —</option>${opts}
-      </select>
-      <button class="btn btn-sm btn-secondary" onclick="saveCharacterVoice(${c.id})">保存</button>
+    return `<div class="char-card">
+      <div class="char-avatar" style="background:${avatarStyle(c.name)}">${escapeHtml(initial)}</div>
+      <div class="char-body">
+        <strong>${escapeHtml(c.name)}</strong>
+        <select data-char-id="${c.id}" class="char-voice-select">
+          <option value="">选择声音…</option>${opts}
+        </select>
+      </div>
+      <button class="btn btn-sm btn-primary" onclick="saveCharacterVoice(${c.id})">保存</button>
     </div>`;
   }).join('');
 }
@@ -224,7 +248,7 @@ async function saveCharacterVoice(charId) {
 function renderLines(lines) {
   const el = document.getElementById('linesList');
   if (!lines.length) {
-    el.innerHTML = '<p class="empty">请先解析文本</p>';
+    el.innerHTML = '<p class="empty"><span class="empty-icon">📝</span><br>请先解析文本</p>';
     return;
   }
   el.innerHTML = lines.map(line => {
@@ -232,22 +256,22 @@ function renderLines(lines) {
     const itemCls = st === 'done' ? 'done' : (st === 'failed' ? 'failed' : '');
     const audioHtml = line.has_audio
       ? `<audio controls src="${audioUrl(line.audio_path)}?t=${line.id}"></audio>`
-      : '<span style="color:var(--muted);font-size:0.85rem">未生成</span>';
+      : '<span class="status-text">未生成</span>';
     return `<div class="line-item ${itemCls}" data-line-id="${line.id}">
       <div class="line-header">
-        <span class="badge">#${line.order + 1}</span>
+        <span class="line-num">${line.order + 1}</span>
         ${lineStatusBadge(st)}
-        <strong>${escapeHtml(line.character_name)}</strong>
-        ${line.voice_name ? `<span style="color:var(--muted);font-size:0.85rem"> → ${escapeHtml(line.voice_name)}</span>` : ''}
+        <span class="line-speaker">${escapeHtml(line.character_name)}</span>
+        ${line.voice_name ? `<span class="line-voice-tag">${escapeHtml(line.voice_name)}</span>` : ''}
       </div>
-      <div class="line-content">${escapeHtml(line.content)}</div>
+      <p class="line-content">${escapeHtml(line.content)}</p>
       <div class="line-actions">
         <input type="text" placeholder="情感（可选）" value="${escapeHtml(line.emotion)}" data-emotion-line="${line.id}">
         <button class="btn btn-sm btn-primary" onclick="generateLine(${line.id}, this)">生成</button>
-        <button class="btn btn-sm btn-secondary" onclick="regenerateLine(${line.id}, this)">重新生成</button>
-        <button class="btn btn-sm btn-secondary" onclick="saveLineEmotion(${line.id})">保存情感</button>
-        <span class="line-audio-slot">${audioHtml}</span>
+        <button class="btn btn-sm btn-secondary" onclick="regenerateLine(${line.id}, this)">重生成</button>
+        <button class="btn btn-sm btn-ghost" onclick="saveLineEmotion(${line.id})">保存情感</button>
       </div>
+      <div class="line-audio-slot">${audioHtml}</div>
     </div>`;
   }).join('');
 }
@@ -362,11 +386,11 @@ async function loadVoices() {
   await loadVoicesCache();
   const el = document.getElementById('voicesGrid');
   if (!voicesCache.length) {
-    el.innerHTML = '<p class="empty">暂无声音</p>';
+    el.innerHTML = '<p class="empty"><span class="empty-icon">🎙</span><br>暂无声音</p>';
     return;
   }
   el.innerHTML = voicesCache.map(v => `
-    <div class="voice-card">
+    <div class="voice-card ${voiceTypeClass(v.type)}">
       <h3>${escapeHtml(v.name)} <span class="badge">${v.type_label}</span></h3>
       <div class="meta">${escapeHtml(v.description || '无描述')}</div>
       ${v.emotion ? `<p style="font-size:0.85rem;margin:4px 0">默认情感：${escapeHtml(v.emotion)}</p>` : ''}
@@ -417,6 +441,11 @@ document.getElementById('btnShowCloneModal').addEventListener('click', () => {
 });
 document.querySelectorAll('.modal-close').forEach(b => {
   b.addEventListener('click', () => b.closest('.modal-overlay').classList.remove('show'));
+});
+document.querySelectorAll('.modal-overlay').forEach(overlay => {
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay) overlay.classList.remove('show');
+  });
 });
 
 document.getElementById('designForm').addEventListener('submit', async e => {
@@ -508,6 +537,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 window.openWorkspace = openWorkspace;
+window.loadProjects = loadProjects;
 window.deleteProject = deleteProject;
 window.saveCharacterVoice = saveCharacterVoice;
 window.generateLine = generateLine;
