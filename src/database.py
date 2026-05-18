@@ -47,6 +47,7 @@ class Voice:
     instruct: Optional[str] = None  # 声音设计描述
     ref_audio_path: Optional[str] = None  # 参考音频路径
     ref_text: Optional[str] = None  # 参考文本
+    emotion: Optional[str] = None  # 默认情感/风格描述
     created_at: str = ""
 
 
@@ -144,6 +145,7 @@ class Database:
                 instruct TEXT,
                 ref_audio_path TEXT,
                 ref_text TEXT,
+                emotion TEXT,
                 created_at TEXT NOT NULL
             )
         ''')
@@ -162,6 +164,7 @@ class Database:
             )
         ''')
         
+        self._migrate_schema(cursor)
         conn.commit()
         # 对于内存数据库，不要关闭连接
         if not self._shared_memory:
@@ -169,6 +172,13 @@ class Database:
         
         # 初始化预置声音
         self.init_predefined_voices()
+
+    def _migrate_schema(self, cursor):
+        """数据库 schema 迁移"""
+        cursor.execute("PRAGMA table_info(voices)")
+        voice_cols = {row[1] for row in cursor.fetchall()}
+        if "emotion" not in voice_cols:
+            cursor.execute("ALTER TABLE voices ADD COLUMN emotion TEXT")
     
     def init_predefined_voices(self):
         """初始化预置声音"""
@@ -263,6 +273,17 @@ class Database:
         cursor.execute('DELETE FROM projects WHERE id = ?', (project_id,))
         conn.commit()
         conn.close()
+
+    def clear_project_parsed_data(self, project_id: int):
+        """清除项目的解析数据（角色、台词、音频片段）"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM audio_segments WHERE project_id = ?', (project_id,))
+        cursor.execute('DELETE FROM lines WHERE project_id = ?', (project_id,))
+        cursor.execute('DELETE FROM characters WHERE project_id = ?', (project_id,))
+        conn.commit()
+        if not self._shared_memory:
+            conn.close()
     
     # 角色操作
     def create_character(self, project_id: int, name: str, voice_id: Optional[int] = None, description: Optional[str] = None) -> int:
@@ -321,6 +342,25 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         return [Line(id=row[0], project_id=row[1], character_id=row[2], content=row[3], order=row[4], emotion=row[5]) for row in rows]
+
+    def get_line(self, line_id: int) -> Optional[Line]:
+        """获取单条台词"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM lines WHERE id = ?', (line_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return Line(id=row[0], project_id=row[1], character_id=row[2], content=row[3], order=row[4], emotion=row[5])
+        return None
+
+    def update_line_emotion(self, line_id: int, emotion: Optional[str]):
+        """更新台词情感"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE lines SET emotion = ? WHERE id = ?', (emotion, line_id))
+        conn.commit()
+        conn.close()
     
     # 声音操作
     def create_voice(self, voice: Voice) -> int:
@@ -329,9 +369,10 @@ class Database:
         cursor = conn.cursor()
         now = datetime.now().isoformat()
         cursor.execute('''
-            INSERT INTO voices (name, voice_type, description, speaker, instruct, ref_audio_path, ref_text, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (voice.name, voice.voice_type, voice.description, voice.speaker, voice.instruct, voice.ref_audio_path, voice.ref_text, now))
+            INSERT INTO voices (name, voice_type, description, speaker, instruct, ref_audio_path, ref_text, emotion, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (voice.name, voice.voice_type, voice.description, voice.speaker, voice.instruct,
+              voice.ref_audio_path, voice.ref_text, voice.emotion, now))
         voice_id = cursor.lastrowid
         conn.commit()
         conn.close()
@@ -345,8 +386,21 @@ class Database:
         row = cursor.fetchone()
         conn.close()
         if row:
-            return Voice(id=row[0], name=row[1], voice_type=row[2], description=row[3], speaker=row[4], instruct=row[5], ref_audio_path=row[6], ref_text=row[7], created_at=row[8])
+            return self._row_to_voice(row)
         return None
+
+    def _row_to_voice(self, row) -> Voice:
+        if len(row) >= 10:
+            return Voice(
+                id=row[0], name=row[1], voice_type=row[2], description=row[3],
+                speaker=row[4], instruct=row[5], ref_audio_path=row[6], ref_text=row[7],
+                emotion=row[8], created_at=row[9] or ""
+            )
+        return Voice(
+            id=row[0], name=row[1], voice_type=row[2], description=row[3],
+            speaker=row[4], instruct=row[5], ref_audio_path=row[6], ref_text=row[7],
+            emotion=None, created_at=row[8] or ""
+        )
     
     def get_all_voices(self) -> List[Voice]:
         """获取所有声音"""
@@ -355,7 +409,21 @@ class Database:
         cursor.execute('SELECT * FROM voices ORDER BY created_at DESC')
         rows = cursor.fetchall()
         conn.close()
-        return [Voice(id=row[0], name=row[1], voice_type=row[2], description=row[3], speaker=row[4], instruct=row[5], ref_audio_path=row[6], ref_text=row[7], created_at=row[8]) for row in rows]
+        return [self._row_to_voice(row) for row in rows]
+
+    def update_voice(self, voice_id: int, **fields):
+        """更新声音信息"""
+        allowed = {"name", "description", "instruct", "emotion", "speaker", "ref_text"}
+        updates = {k: v for k, v in fields.items() if k in allowed}
+        if not updates:
+            return
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        set_clause = ", ".join(f"{k} = ?" for k in updates)
+        values = list(updates.values()) + [voice_id]
+        cursor.execute(f'UPDATE voices SET {set_clause} WHERE id = ?', values)
+        conn.commit()
+        conn.close()
     
     def delete_voice(self, voice_id: int):
         """删除声音"""
@@ -387,6 +455,35 @@ class Database:
         rows = cursor.fetchall()
         conn.close()
         return [AudioSegment(id=row[0], project_id=row[1], line_id=row[2], character_id=row[3], audio_path=row[4], duration=row[5]) for row in rows]
+
+    def get_audio_segment_by_line(self, line_id: int) -> Optional[AudioSegment]:
+        """获取台词对应的音频片段"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            'SELECT * FROM audio_segments WHERE line_id = ? ORDER BY id DESC LIMIT 1',
+            (line_id,)
+        )
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return AudioSegment(id=row[0], project_id=row[1], line_id=row[2], character_id=row[3], audio_path=row[4], duration=row[5])
+        return None
+
+    def upsert_audio_segment(self, project_id: int, line_id: int, character_id: Optional[int],
+                             audio_path: str, duration: Optional[float] = None) -> int:
+        """更新或插入音频片段"""
+        conn = self.get_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM audio_segments WHERE line_id = ?', (line_id,))
+        cursor.execute('''
+            INSERT INTO audio_segments (project_id, line_id, character_id, audio_path, duration)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (project_id, line_id, character_id, audio_path, duration))
+        segment_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
+        return segment_id
 
 
 # 全局数据库实例

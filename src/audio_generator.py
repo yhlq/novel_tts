@@ -27,6 +27,7 @@ class VoiceConfig:
     instruct: Optional[str] = None
     ref_audio_path: Optional[str] = None
     ref_text: Optional[str] = None
+    emotion: Optional[str] = None
 
 
 class AudioGenerator(LoggerMixin):
@@ -126,7 +127,18 @@ class AudioGenerator(LoggerMixin):
         
         self.logger.info("所有模型加载完成！")
     
-    def generate_custom_voice(self, text: str, speaker: str, language: str = None, instruct: str = "") -> Tuple[np.ndarray, int]:
+    def _inference_kwargs(self, kwargs: dict) -> dict:
+        defaults = {
+            "temperature": config.get("temperature", 0.9),
+            "top_p": config.get("top_p", 1.0),
+            "top_k": config.get("top_k", 50),
+            "repetition_penalty": config.get("repetition_penalty", 1.05),
+            "max_new_tokens": config.get("max_new_tokens", 2048),
+        }
+        defaults.update({k: v for k, v in kwargs.items() if v is not None})
+        return defaults
+
+    def generate_custom_voice(self, text: str, speaker: str, language: str = None, instruct: str = "", **kwargs) -> Tuple[np.ndarray, int]:
         """
         使用预置声音生成音频
         
@@ -148,11 +160,13 @@ class AudioGenerator(LoggerMixin):
         start_time = time.time()
         
         try:
+            gen_kw = self._inference_kwargs(kwargs)
             wavs, sr = self.custom_voice_model.generate_custom_voice(
                 text=text,
                 language=language,
                 speaker=speaker,
                 instruct=instruct,
+                **gen_kw,
             )
             
             generation_time = time.time() - start_time
@@ -164,7 +178,7 @@ class AudioGenerator(LoggerMixin):
             self.log_error("预置声音音频生成失败", e)
             raise
     
-    def generate_voice_design(self, text: str, instruct: str, language: str = None) -> Tuple[np.ndarray, int]:
+    def generate_voice_design(self, text: str, instruct: str, language: str = None, **kwargs) -> Tuple[np.ndarray, int]:
         """
         使用声音设计生成音频
         
@@ -182,10 +196,12 @@ class AudioGenerator(LoggerMixin):
         start_time = time.time()
         
         try:
+            gen_kw = self._inference_kwargs(kwargs)
             wavs, sr = self.voice_design_model.generate_voice_design(
                 text=text,
                 language=language,
                 instruct=instruct,
+                **gen_kw,
             )
             
             generation_time = time.time() - start_time
@@ -197,7 +213,7 @@ class AudioGenerator(LoggerMixin):
             self.log_error("设计声音音频生成失败", e)
             raise
     
-    def generate_voice_clone(self, text: str, ref_audio_path: str, ref_text: str, language: str = None) -> Tuple[np.ndarray, int]:
+    def generate_voice_clone(self, text: str, ref_audio_path: str, ref_text: str, language: str = None, **kwargs) -> Tuple[np.ndarray, int]:
         """
         使用声音克隆生成音频
         
@@ -216,11 +232,13 @@ class AudioGenerator(LoggerMixin):
         start_time = time.time()
         
         try:
+            gen_kw = self._inference_kwargs(kwargs)
             wavs, sr = self.voice_clone_model.generate_voice_clone(
                 text=text,
                 language=language,
                 ref_audio=ref_audio_path,
                 ref_text=ref_text,
+                **gen_kw,
             )
             
             generation_time = time.time() - start_time
