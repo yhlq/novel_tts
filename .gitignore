@@ -1,0 +1,12 @@
+*.db
+__pycache__/
+*.pyc
+logs/*.log
+static/audio/*.wav
+static/uploads/*.wav
+*.egg-info/
+dist/
+build/
+.ipynb_checkpoints/
+.vscode/
+.idea/
