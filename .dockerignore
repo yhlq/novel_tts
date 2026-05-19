@@ -1,4 +1,3 @@
-# novel_tts/.dockerignore
 __pycache__/
 *.pyc
 *.pyo
@@ -9,25 +8,42 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-*.log
 .env
 .venv/
 venv/
 env/
 .git/
 .gitignore
-README.md
-*.md
-output/
-models/
-config/
-.DS_Store
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.cache/
 .pytest_cache/
 .coverage
 htmlcov/
+.cache/
+*.swp
+*.swo
+*~
+.DS_Store
+.vscode/
+.idea/
+
+# 日志与本地数据库（容器内重新生成）
+logs/
+*.log
+novel_tts.db
+
+# 大文件与模型（通过 volume 挂载）
+models/
+static/audio/*
+static/uploads/*
+static/voice_prompts/*
+static/voice_anchors/*
+
+# 备份目录中无关内容
+bk/**/.git/
+bk/**/examples/
+bk/**/finetuning/
+bk/**/.github/
+
+# 文档不影响运行
+docs/
+*.md
+!README.md

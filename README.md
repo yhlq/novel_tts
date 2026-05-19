@@ -61,7 +61,44 @@ cd ../..
 python main.py
 ```
 
-服务将在 http://localhost:8000 启动
+服务将在 http://localhost:7860 启动
+
+## Docker 部署
+
+### 前置条件
+
+- [Docker](https://docs.docker.com/get-docker/) 与 [Docker Compose](https://docs.docker.com/compose/)
+- NVIDIA GPU + [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)（推荐）
+
+### 快速启动
+
+```bash
+# 构建并启动（默认端口 7860）
+docker compose up -d --build
+
+# 查看日志
+docker compose logs -f novel-tts
+```
+
+浏览器访问：http://localhost:7860
+
+### 模型与配置
+
+- 容器默认使用 `config.docker.json`（HuggingFace 模型 ID），首次运行会自动下载到 `./models` 卷。
+- 若已有本地权重，可编辑 `config.json` 中的模型路径，并在 `docker-compose.yml` 中挂载：
+
+```yaml
+volumes:
+  - ./config.json:/app/config.json:ro
+  - /你的模型目录:/models:ro
+```
+
+### 仅 CPU（调试用）
+
+```bash
+docker build -f Dockerfile.cpu -t novel-tts:cpu .
+docker run -p 7860:7860 -v "$(pwd)/models:/models/huggingface" novel-tts:cpu
+```
 
 ## 配置文件
 
