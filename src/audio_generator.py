@@ -8,10 +8,6 @@ import soundfile as sf
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
 from dataclasses import dataclass
-
-# 添加Qwen3-TTS路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'qwen3-tts-usages', 'Qwen3-TTS'))
-
 from qwen_tts import Qwen3TTSModel
 from .config_manager import config
 from .logger import LoggerMixin, log_time, log_execution_time, log_model_info, log_generation_info
