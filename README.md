@@ -52,9 +52,7 @@ pip install -r requirements.txt
 4. 安装Qwen3-TTS
 
 ```bash
-cd qwen3-tts-usages/Qwen3-TTS
-pip install -e .
-cd ../..
+pip install -U qwen-tts
 ```
 
 5. 启动服务
