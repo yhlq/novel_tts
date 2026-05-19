@@ -1,0 +1,39 @@
+# CPU 版镜像（仅用于开发/调试，合成速度很慢，不推荐生产）
+# 构建: docker build -f Dockerfile.cpu -t novel-tts:cpu .
+
+FROM python:3.12-slim-bookworm
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HOME=/models/huggingface \
+    APP_HOME=/app \
+    PORT=7860
+
+WORKDIR ${APP_HOME}
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg libsndfile1 sox libsox-dev curl build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN pip install --upgrade pip setuptools wheel \
+    && pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu \
+    && pip install -r requirements.txt
+
+COPY bk/qwen3-tts-usages/Qwen3-TTS /tmp/Qwen3-TTS
+RUN pip install -e /tmp/Qwen3-TTS && rm -rf /tmp/Qwen3-TTS/.git
+
+COPY main.py config.docker.json ./
+COPY src/ ./src/
+COPY static/ ./static/
+COPY docs/novel_example.txt ./novel_example.txt
+
+RUN cp config.docker.json config.json \
+    && python -c "import json; c=json.load(open('config.json')); c['device']='cpu'; c['dtype']='float32'; json.dump(c, open('config.json','w'), indent=2, ensure_ascii=False)" \
+    && mkdir -p logs static/audio static/uploads static/voice_prompts static/voice_anchors models
+
+EXPOSE ${PORT}
+
+CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]

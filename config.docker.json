@@ -1,0 +1,59 @@
+{
+  "models": {
+    "custom_voice": {
+      "name": "Qwen/Qwen3-TTS-12Hz-{model_size}-CustomVoice",
+      "description": "预置声音生成模型",
+      "supported_speakers": [
+        "Vivian",
+        "Serena",
+        "Uncle_Fu",
+        "Dylan",
+        "Eric",
+        "Ryan",
+        "Aiden",
+        "Ono_Anna",
+        "Sohee"
+      ]
+    },
+    "voice_design": {
+      "name": "Qwen/Qwen3-TTS-12Hz-{model_size}-VoiceDesign",
+      "description": "声音设计模型"
+    },
+    "base": {
+      "name": "Qwen/Qwen3-TTS-12Hz-{model_size}-Base",
+      "description": "声音克隆模型"
+    }
+  },
+  "model_size": "1.7B",
+  "device": "cuda:0",
+  "dtype": "bfloat16",
+  "attn_implementation": null,
+  "language": "Chinese",
+  "output_sample_rate": 24000,
+  "max_new_tokens": 2048,
+  "temperature": 0.4,
+  "top_p": 1.0,
+  "top_k": 50,
+  "repetition_penalty": 1.05,
+  "consistency": {
+    "enabled": true,
+    "design_via_clone": true,
+    "stable_instruct": true,
+    "line_emotion_affects_timbre": false,
+    "temperature": 0.65,
+    "top_p": 0.9,
+    "top_k": 40,
+    "repetition_penalty": 1.05,
+    "x_vector_only_mode": false,
+    "anchor_text": "你好，我是这个角色，很高兴为你朗读这段小说。"
+  },
+  "audio": {
+    "pause_duration": 0.5,
+    "output_format": "wav"
+  },
+  "paths": {
+    "model_cache_dir": "/models/huggingface",
+    "audio_output_dir": "./static/audio",
+    "upload_dir": "./static/uploads"
+  }
+}
