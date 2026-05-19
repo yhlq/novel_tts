@@ -1,0 +1,31 @@
+services:
+  novel-tts:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: novel-tts:latest
+    container_name: novel-tts
+    ports:
+      - "7860:7860"
+    environment:
+      # 可选：HuggingFace 镜像或 Token
+      # HF_ENDPOINT: https://hf-mirror.com
+      # HUGGING_FACE_HUB_TOKEN: your_token
+      NVIDIA_VISIBLE_DEVICES: all
+    volumes:
+      # 模型缓存（首次启动会从 HuggingFace 下载，建议持久化）
+      - ./models:/models/huggingface
+      # 使用宿主机配置（含本地模型路径）时取消注释：
+      # - ./config.json:/app/config.json:ro
+      - ./static/audio:/app/static/audio
+      - ./static/uploads:/app/static/uploads
+      - ./static/voice_prompts:/app/static/voice_prompts
+      - ./static/voice_anchors:/app/static/voice_anchors
+      - ./logs:/app/logs
+      - novel_tts_data:/app/data
+    gpus: all
+    restart: unless-stopped
+    shm_size: "8gb"
+
+volumes:
+  novel_tts_data:
